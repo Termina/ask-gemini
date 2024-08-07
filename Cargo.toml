@@ -1,0 +1,15 @@
+[package]
+name = "chat-gemini"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "gmn"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+# genai = { path = "/Users/chenyong/repo/termina/genai" }
+genai = { git = "https://github.com/Termina/rust-genai.git", branch = "proxy" }
+argh = "0.1.12"
