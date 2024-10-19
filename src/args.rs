@@ -12,6 +12,10 @@ pub struct GmnTop {
   #[argh(option, short = 'p')]
   pub prompt: Option<String>,
 
+  /// a model name, default is gemini-1.5-flash-latest
+  #[argh(option, short = 'm')]
+  pub model: Option<String>,
+
   #[argh(switch)]
   /// read from stdin, mostly from pipe
   pub stdin: bool,
