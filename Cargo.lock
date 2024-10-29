@@ -333,7 +333,7 @@ dependencies = [
 [[package]]
 name = "genai"
 version = "0.1.7-wip"
-source = "git+https://github.com/Termina/rust-genai.git?branch=proxy#a0c5d3222aeb620db39ec06bbbe6394a9803b8eb"
+source = "git+https://github.com/Termina/rust-genai.git?branch=proxy#2e613b4bdf0c90a5ddfcf3167b936652198ae0fe"
 dependencies = [
  "bytes",
  "derive_more",
