@@ -53,19 +53,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ChatMessage::user(file_content),
   ]);
 
-  // 创建一个自定义的 ServiceTargetResolver
+  // Create a custom ServiceTargetResolver
   let target_resolver =
     ServiceTargetResolver::from_resolver_fn(|service_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
       let ServiceTarget { model, auth, .. } = service_target;
 
-      // 设置自定义的 endpoint
+      // Set custom endpoint
       let endpoint = Endpoint::from_owned("https://ja.chenyong.life/v1beta/");
 
-      // 保持原有的 auth 和 model
+      // Keep original auth and model
       Ok(ServiceTarget { endpoint, auth, model })
     });
 
-  // 使用自定义的 resolver 创建 client
+  // Create client with custom resolver
   let client = Client::builder().with_service_target_resolver(target_resolver).build();
 
   let print_options = PrintChatStreamOptions::from_print_events(false);
