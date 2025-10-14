@@ -1,3 +1,5 @@
 /target
 
 env.sh
+
+.DS_Store

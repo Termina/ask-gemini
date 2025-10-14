@@ -5,9 +5,10 @@ use std::io::Read;
 use args::GmnTop;
 use genai::chat::printer::{print_chat_stream, PrintChatStreamOptions};
 use genai::chat::{ChatMessage, ChatRequest};
-use genai::Client;
+use genai::resolver::{Endpoint, ServiceTargetResolver};
+use genai::{Client, ServiceTarget};
 
-const MODEL_GEMINI: &str = "gemini-1.5-flash-latest";
+const MODEL_GEMINI: &str = "gemini-2.5-flash";
 const MODEL_CLAUDE: &str = "claude-3-5-sonnet-20240620";
 
 const GEMINI_ENV_NAME: &str = "GEMINI_API_KEY";
@@ -19,11 +20,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   if options.model == Some("claude".to_string()) {
     if std::env::var(CLAUDE_ENV_NAME).is_err() {
-      eprintln!("Please set the environment variable `{}`", CLAUDE_ENV_NAME);
+      eprintln!("Please set the environment variable `{CLAUDE_ENV_NAME}`");
       std::process::exit(1);
     }
   } else if std::env::var(GEMINI_ENV_NAME).is_err() {
-    eprintln!("Please set the environment variable `{}`", GEMINI_ENV_NAME);
+    eprintln!("Please set the environment variable `{GEMINI_ENV_NAME}`");
     std::process::exit(1);
   }
 
@@ -52,7 +53,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ChatMessage::user(file_content),
   ]);
 
-  let client = Client::default();
+  // 创建一个自定义的 ServiceTargetResolver
+  let target_resolver =
+    ServiceTargetResolver::from_resolver_fn(|service_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
+      let ServiceTarget { model, auth, .. } = service_target;
+
+      // 设置自定义的 endpoint
+      let endpoint = Endpoint::from_owned("https://ja.chenyong.life/v1beta/");
+
+      // 保持原有的 auth 和 model
+      Ok(ServiceTarget { endpoint, auth, model })
+    });
+
+  // 使用自定义的 resolver 创建 client
+  let client = Client::builder().with_service_target_resolver(target_resolver).build();
 
   let print_options = PrintChatStreamOptions::from_print_events(false);
 
