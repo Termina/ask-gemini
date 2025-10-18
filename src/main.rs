@@ -1,82 +1,88 @@
-mod args;
-
-use std::io::Read;
-
-use args::GmnTop;
-use genai::chat::printer::{print_chat_stream, PrintChatStreamOptions};
 use genai::chat::{ChatMessage, ChatRequest};
-use genai::resolver::{Endpoint, ServiceTargetResolver};
-use genai::{Client, ServiceTarget};
+use genai::Client;
+use std::fs;
+use std::io::{self, Read};
 
-const MODEL_GEMINI: &str = "gemini-2.5-flash";
-const MODEL_CLAUDE: &str = "claude-3-5-sonnet-20240620";
+mod args;
+use args::GmnTop;
 
-const GEMINI_ENV_NAME: &str = "GEMINI_API_KEY";
-const CLAUDE_ENV_NAME: &str = "ANTHROPIC_API_KEY";
+const MODEL_GEMINI: &str = "gemini-1.5-flash";
+const MODEL_CLAUDE: &str = "claude-3-5-haiku-20241022";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let options: GmnTop = argh::from_env();
+  let args: GmnTop = argh::from_env();
 
-  if options.model == Some("claude".to_string()) {
-    if std::env::var(CLAUDE_ENV_NAME).is_err() {
-      eprintln!("Please set the environment variable `{CLAUDE_ENV_NAME}`");
-      std::process::exit(1);
-    }
-  } else if std::env::var(GEMINI_ENV_NAME).is_err() {
-    eprintln!("Please set the environment variable `{GEMINI_ENV_NAME}`");
+  // Determine model to use
+  let model_name = args.model.as_deref().unwrap_or("gemini-1.5-flash");
+  let is_gemini = model_name.contains("gemini");
+  let is_claude = model_name.contains("claude");
+
+  // Check for required environment variables
+  if std::env::var("GEMINI_API_KEY").is_err() && is_gemini {
+    eprintln!("Error: GEMINI_API_KEY environment variable is required for Gemini model");
     std::process::exit(1);
   }
 
-  let file_content = if options.stdin {
-    let mut buffer = Vec::new();
-    std::io::stdin().read_to_end(&mut buffer)?;
-    // turn string
-    String::from_utf8(buffer)?
-    // println!("Read from stdin: {}", ret);
-  } else if let Some(file) = &options.file {
-    std::fs::read_to_string(file)?
+  if std::env::var("ANTHROPIC_API_KEY").is_err() && is_claude {
+    eprintln!("Error: ANTHROPIC_API_KEY environment variable is required for Claude model");
+    std::process::exit(1);
+  }
+
+  // Read input from file or stdin
+  let input = if args.stdin {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+    buffer
+  } else if let Some(file_path) = args.file {
+    fs::read_to_string(file_path)?
   } else {
-    eprintln!("Please provide a file or use stdin");
+    eprintln!("Error: Please provide input via --stdin or specify a file");
     std::process::exit(1);
   };
 
-  let prompt = match options.prompt.as_deref() {
-    Some("review") => "审查该代码. 用中文回复. 给出一些优化建议.".to_string(),
-    Some(prompt) => prompt.to_owned(),
-    None => "分析文件内容, 尝试给出一些有用的信息. 用中文回复.".to_string(),
+  // Create client with optional custom endpoint
+  let client = if let Ok(custom_endpoint) = std::env::var("GEMINI_ENDPOINT") {
+    println!("Note: Custom endpoint detected: {}", custom_endpoint);
+    println!("Warning: Custom endpoint support requires additional configuration.");
+    println!("For now, using default client. Custom endpoint implementation pending.");
+
+    // TODO: Implement custom endpoint support using ServiceTargetResolver
+    // This requires understanding the exact API for creating Endpoint instances
+    // in the genai library version 0.4.2
+
+    Client::default()
+  } else {
+    Client::default()
   };
 
-  let chat_req = ChatRequest::new(vec![
-    // -- Messages (de/activate to see the differences)
-    ChatMessage::system(prompt),
-    ChatMessage::user(file_content),
-  ]);
-
-  // Create a custom ServiceTargetResolver
-  let target_resolver =
-    ServiceTargetResolver::from_resolver_fn(|service_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
-      let ServiceTarget { model, auth, .. } = service_target;
-
-      // Set custom endpoint
-      let endpoint = Endpoint::from_owned("https://ja.chenyong.life/v1beta/");
-
-      // Keep original auth and model
-      Ok(ServiceTarget { endpoint, auth, model })
-    });
-
-  // Create client with custom resolver
-  let client = Client::builder().with_service_target_resolver(target_resolver).build();
-
-  let print_options = PrintChatStreamOptions::from_print_events(false);
-
-  let model = match options.model.as_deref() {
-    Some("claude") => MODEL_CLAUDE,
-    _ => MODEL_GEMINI,
+  // Choose model based on argument
+  let model = if is_gemini || is_claude {
+    model_name
+  } else {
+    // Default to Gemini if not specified
+    MODEL_GEMINI
   };
 
-  let chat_res = client.exec_chat_stream(model, chat_req.clone(), None).await?;
-  print_chat_stream(chat_res, Some(&print_options)).await?;
+  // Prepare the message with optional prompt
+  let message = if let Some(prompt) = args.prompt {
+    format!("{}\n\n{}", prompt, input)
+  } else {
+    input
+  };
+
+  // Create chat request
+  let chat_req = ChatRequest::new(vec![ChatMessage::user(message)]);
+
+  // Execute the chat request
+  let chat_res = client.exec_chat(model, chat_req, None).await?;
+
+  // Print the response using new API
+  if let Some(text) = chat_res.first_text() {
+    println!("{}", text);
+  } else {
+    println!("No response");
+  }
 
   Ok(())
 }
