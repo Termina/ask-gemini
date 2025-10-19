@@ -12,7 +12,7 @@ pub struct GmnTop {
   #[argh(option, short = 'p')]
   pub prompt: Option<String>,
 
-  /// a model name, default is gemini-1.5-flash-latest
+  /// a model name, default is gemini-pro
   #[argh(option, short = 'm')]
   pub model: Option<String>,
 

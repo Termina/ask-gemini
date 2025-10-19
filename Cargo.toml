@@ -10,6 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-genai = "0.4.2"
+gemini-rust = "1.5.1"
 url = "2.5"
 argh = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+display-error-chain = "0.1.0"
+futures = "0.3"
