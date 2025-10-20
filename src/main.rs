@@ -1,10 +1,11 @@
 use display_error_chain::DisplayErrorChain;
-use futures::TryStreamExt;
+use futures::{pin_mut, TryStreamExt};
 use gemini_rust::GenerationConfig;
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
+use std::time::Duration;
 use tracing::info;
 
 mod args;
@@ -72,7 +73,12 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   // Set model and build client
-  let client = builder.with_model(format!("models/{}", model_name)).build()?;
+  let client_builder = reqwest::Client::builder().timeout(Duration::from_secs(120));
+
+  let client = builder
+    .with_http_client(client_builder)
+    .with_model(format!("models/{}", model_name))
+    .build()?;
 
   // Read input from file or stdin
   let input = if args.stdin {
@@ -97,7 +103,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   info!("Sending streaming request to Gemini API with model: {}", model_name);
 
   // Create a streaming request
-  let mut stream = match client
+  let stream = match client
     .generate_content()
     .with_system_instruction("You are a helpful assistant.")
     .with_user_message(user_message)
@@ -115,6 +121,8 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
       return Err(format!("API streaming request failed: {}", e).into());
     }
   };
+
+  pin_mut!(stream);
 
   // Process the stream chunks as they arrive
   info!("Receiving streaming response from Gemini API");
