@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
 }
 
 fn init_tracing(debug: bool) {
-  let default_level = if debug { LevelFilter::DEBUG } else { LevelFilter::INFO };
+  let default_level = if debug { LevelFilter::DEBUG } else { LevelFilter::WARN };
   tracing_subscriber::fmt()
     .with_target(debug)
     .with_env_filter(
