@@ -112,7 +112,7 @@ async fn do_main(args: GmnTop) -> Result<(), Box<dyn std::error::Error>> {
   };
 
   // Prepare the message with optional prompt
-  let user_message = if let Some(prompt) = prompt.as_ref() {
+  let user_message = if let Some(prompt) = prompt {
     format!("{}\n\n-------\n\n{}", prompt, input)
   } else {
     input
