@@ -28,6 +28,14 @@ pub struct GmnTop {
   /// read from stdin, mostly from pipe
   pub stdin: bool,
 
+  #[argh(switch)]
+  /// enable verbose debug logging
+  pub debug: bool,
+
+  #[argh(switch)]
+  /// disable markdown styling in streamed output
+  pub no_markdown: bool,
+
   /// input file path
   #[argh(positional)]
   pub file: Option<String>,

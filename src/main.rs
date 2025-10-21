@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
 use std::time::Duration;
+use tracing::level_filters::LevelFilter;
 use tracing::{debug, info, warn};
 
 mod args;
@@ -15,15 +16,10 @@ use terminal::StreamingFormatter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-  tracing_subscriber::fmt()
-    .with_env_filter(
-      tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-        .from_env_lossy(),
-    )
-    .init();
+  let args: GmnTop = argh::from_env();
+  init_tracing(args.debug);
 
-  match do_main().await {
+  match do_main(args).await {
     Ok(()) => ExitCode::SUCCESS,
     Err(e) => {
       let error_chain = DisplayErrorChain::new(e.as_ref());
@@ -33,11 +29,32 @@ async fn main() -> ExitCode {
   }
 }
 
-async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
-  let args: GmnTop = argh::from_env();
+fn init_tracing(debug: bool) {
+  let default_level = if debug { LevelFilter::INFO } else { LevelFilter::WARN };
+  tracing_subscriber::fmt()
+    .with_target(debug)
+    .with_env_filter(
+      tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .from_env_lossy(),
+    )
+    .init();
+}
+
+async fn do_main(args: GmnTop) -> Result<(), Box<dyn std::error::Error>> {
+  let GmnTop {
+    prompt,
+    model,
+    temperature,
+    max_tokens,
+    stdin,
+    debug: _,
+    no_markdown,
+    file,
+  } = args;
 
   // Determine model to use
-  let model_name = args.model.as_deref().unwrap_or("gemini-2.5-flash");
+  let model_name = model.as_deref().unwrap_or("gemini-2.5-flash");
 
   // Check for required environment variables
   if env::var("GEMINI_API_KEY").is_err() {
@@ -83,11 +100,11 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     .build()?;
 
   // Read input from file or stdin
-  let input = if args.stdin {
+  let input = if stdin {
     let mut buffer = String::new();
     io::stdin().read_to_string(&mut buffer)?;
     buffer
-  } else if let Some(file_path) = args.file {
+  } else if let Some(file_path) = file {
     fs::read_to_string(file_path)?
   } else {
     eprintln!("Error: Please provide input via --stdin or specify a file");
@@ -95,15 +112,15 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   // Prepare the message with optional prompt
-  let user_message = if let Some(prompt) = args.prompt {
+  let user_message = if let Some(prompt) = prompt.as_ref() {
     format!("{}\n\n-------\n\n{}", prompt, input)
   } else {
     input
   };
 
   // Get configuration from command line arguments with defaults
-  let temperature = args.temperature.unwrap_or(0.3);
-  let max_output_tokens = args.max_tokens.unwrap_or(8192);
+  let temperature = temperature.unwrap_or(0.3);
+  let max_output_tokens = max_tokens.unwrap_or(8192);
 
   // Execute the request in streaming mode
   info!("Sending streaming request to Gemini API with model: {}", model_name);
@@ -143,7 +160,11 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   info!("Receiving streaming response from Gemini API");
   let mut full_response = String::new();
   let mut chunk_count = 0;
-  let mut formatter = StreamingFormatter::new(anstream::stdout());
+  let mut formatter = if no_markdown {
+    StreamingFormatter::plain(anstream::stdout())
+  } else {
+    StreamingFormatter::styled(anstream::stdout())
+  };
 
   // 记录请求开始时间
   let start_time = std::time::Instant::now();
