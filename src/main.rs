@@ -1,27 +1,25 @@
 use display_error_chain::DisplayErrorChain;
 use futures::{pin_mut, TryStreamExt};
-use gemini_rust::{GenerationConfig, FinishReason};
+use gemini_rust::{FinishReason, GenerationConfig};
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::process::ExitCode;
 use std::time::Duration;
-use tracing::{info, warn, debug};
+use tracing::level_filters::LevelFilter;
+use tracing::{debug, info, warn};
 
 mod args;
 use args::GmnTop;
+mod terminal;
+use terminal::StreamingFormatter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-  tracing_subscriber::fmt()
-    .with_env_filter(
-      tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-        .from_env_lossy(),
-    )
-    .init();
+  let args: GmnTop = argh::from_env();
+  init_tracing(args.debug);
 
-  match do_main().await {
+  match do_main(args).await {
     Ok(()) => ExitCode::SUCCESS,
     Err(e) => {
       let error_chain = DisplayErrorChain::new(e.as_ref());
@@ -31,11 +29,32 @@ async fn main() -> ExitCode {
   }
 }
 
-async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
-  let args: GmnTop = argh::from_env();
+fn init_tracing(debug: bool) {
+  let default_level = if debug { LevelFilter::DEBUG } else { LevelFilter::WARN };
+  tracing_subscriber::fmt()
+    .with_target(debug)
+    .with_env_filter(
+      tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .from_env_lossy(),
+    )
+    .init();
+}
+
+async fn do_main(args: GmnTop) -> Result<(), Box<dyn std::error::Error>> {
+  let GmnTop {
+    prompt,
+    model,
+    temperature,
+    max_tokens,
+    stdin,
+    debug: _,
+    no_markdown,
+    file,
+  } = args;
 
   // Determine model to use
-  let model_name = args.model.as_deref().unwrap_or("gemini-2.5-flash");
+  let model_name = model.as_deref().unwrap_or("gemini-2.5-flash");
 
   // Check for required environment variables
   if env::var("GEMINI_API_KEY").is_err() {
@@ -81,11 +100,11 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     .build()?;
 
   // Read input from file or stdin
-  let input = if args.stdin {
+  let input = if stdin {
     let mut buffer = String::new();
     io::stdin().read_to_string(&mut buffer)?;
     buffer
-  } else if let Some(file_path) = args.file {
+  } else if let Some(file_path) = file {
     fs::read_to_string(file_path)?
   } else {
     eprintln!("Error: Please provide input via --stdin or specify a file");
@@ -93,15 +112,15 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   // Prepare the message with optional prompt
-  let user_message = if let Some(prompt) = args.prompt {
+  let user_message = if let Some(prompt) = prompt {
     format!("{}\n\n-------\n\n{}", prompt, input)
   } else {
     input
   };
 
   // Get configuration from command line arguments with defaults
-  let temperature = args.temperature.unwrap_or(0.3);
-  let max_output_tokens = args.max_tokens.unwrap_or(8192);
+  let temperature = temperature.unwrap_or(0.3);
+  let max_output_tokens = max_tokens.unwrap_or(8192);
 
   // Execute the request in streaming mode
   info!("Sending streaming request to Gemini API with model: {}", model_name);
@@ -128,7 +147,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(stream) => {
       info!("Successfully created streaming response");
       stream
-    },
+    }
     Err(e) => {
       tracing::error!(error = ?e, "Failed to get streaming response from Gemini API");
       return Err(format!("API streaming request failed: {}", e).into());
@@ -141,49 +160,54 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
   info!("Receiving streaming response from Gemini API");
   let mut full_response = String::new();
   let mut chunk_count = 0;
+  let mut formatter = if no_markdown {
+    StreamingFormatter::plain(anstream::stdout())
+  } else {
+    StreamingFormatter::styled(anstream::stdout())
+  };
 
   // 记录请求开始时间
   let start_time = std::time::Instant::now();
-  
+
   info!("Starting to process stream chunks");
   while let Some(chunk) = stream.try_next().await? {
     chunk_count += 1;
     let text = chunk.text();
     let text_len = text.len();
-    
+
     // 检查 finishReason 以识别响应限制
     for candidate in &chunk.candidates {
       if let Some(finish_reason) = &candidate.finish_reason {
         match finish_reason {
-           FinishReason::MaxTokens => {
-             warn!("🚫 Response was truncated due to max_output_tokens limit!");
-             warn!("   Current max_output_tokens: {}", max_output_tokens);
-             warn!("   💡 Solution: Increase --max-tokens to {} or higher", max_output_tokens * 2);
-             warn!("   💡 Example: --max-tokens {}", max_output_tokens * 2);
-           },
-           FinishReason::Safety => {
-             warn!("🚫 Response was blocked due to safety concerns!");
-             warn!("   💡 Try rephrasing your prompt to be more neutral");
-             warn!("   💡 Avoid sensitive topics or explicit content");
-             warn!("   💡 Consider using a different model if appropriate");
-           },
-           FinishReason::Recitation => {
-             warn!("🚫 Response was blocked due to recitation concerns!");
-             warn!("   💡 The model detected potential copyright content");
-             warn!("   💡 Try asking for original content or paraphrasing");
-             warn!("   💡 Avoid requesting direct quotes from copyrighted material");
-           },
-           FinishReason::Stop => {
-             debug!("✅ Response completed normally with STOP reason");
-           },
-           _ => {
-             warn!("ℹ️  Response finished with reason: {:?}", finish_reason);
-             warn!("   💡 This is an uncommon finish reason, check Gemini API documentation");
-           }
-         }
+          FinishReason::MaxTokens => {
+            warn!("🚫 Response was truncated due to max_output_tokens limit!");
+            warn!("   Current max_output_tokens: {}", max_output_tokens);
+            warn!("   💡 Solution: Increase --max-tokens to {} or higher", max_output_tokens * 2);
+            warn!("   💡 Example: --max-tokens {}", max_output_tokens * 2);
+          }
+          FinishReason::Safety => {
+            warn!("🚫 Response was blocked due to safety concerns!");
+            warn!("   💡 Try rephrasing your prompt to be more neutral");
+            warn!("   💡 Avoid sensitive topics or explicit content");
+            warn!("   💡 Consider using a different model if appropriate");
+          }
+          FinishReason::Recitation => {
+            warn!("🚫 Response was blocked due to recitation concerns!");
+            warn!("   💡 The model detected potential copyright content");
+            warn!("   💡 Try asking for original content or paraphrasing");
+            warn!("   💡 Avoid requesting direct quotes from copyrighted material");
+          }
+          FinishReason::Stop => {
+            debug!("✅ Response completed normally with STOP reason");
+          }
+          _ => {
+            warn!("ℹ️  Response finished with reason: {:?}", finish_reason);
+            warn!("   💡 This is an uncommon finish reason, check Gemini API documentation");
+          }
+        }
       }
     }
-    
+
     // 记录每个块的信息
     info!(
       chunk_number = chunk_count,
@@ -191,54 +215,61 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
       elapsed_ms = start_time.elapsed().as_millis(),
       "Received chunk"
     );
-    
+
     if text_len == 0 {
       warn!("Received empty chunk #{}", chunk_count);
     } else {
       // 记录块的前10个字符（或全部如果少于10个），安全处理 UTF-8 字符边界
-       let preview = if text.chars().count() > 10 {
-         let truncated: String = text.chars().take(10).collect();
-         format!("{}...", truncated.replace('\n', "\\n"))
-       } else {
-         text.replace('\n', "\\n")
-       };
+      let preview = if text.chars().count() > 10 {
+        let truncated: String = text.chars().take(10).collect();
+        format!("{}...", truncated.replace('\n', "\\n"))
+      } else {
+        text.replace('\n', "\\n")
+      };
       debug!(preview = %preview, "Chunk content preview");
-      
-      print!("{}", text);
+
+      formatter.write_chunk(&text)?;
       full_response.push_str(&text);
-      
-      // Flush stdout to ensure immediate display
-      if let Err(e) = io::stdout().flush() {
-        warn!(error = ?e, "Failed to flush stdout");
-      }
     }
   }
 
-  println!(); // Add a newline at the end
-  
+  formatter.finish()?;
+
   // 记录完整响应的信息
   if full_response.is_empty() {
     warn!("⚠️  Completed streaming response but received empty content");
-    
+
     // 分析可能的原因并提供调整建议
     warn!("🔍 Analyzing possible reasons for empty response:");
-    warn!("   Current parameters: max_output_tokens={}, temperature={}", max_output_tokens, temperature);
-    
+    warn!(
+      "   Current parameters: max_output_tokens={}, temperature={}",
+      max_output_tokens, temperature
+    );
+
     if max_output_tokens < 100 {
-      warn!("   💡 max_output_tokens ({}) is very low. Try increasing to 500+ for meaningful responses.", max_output_tokens);
+      warn!(
+        "   💡 max_output_tokens ({}) is very low. Try increasing to 500+ for meaningful responses.",
+        max_output_tokens
+      );
     } else if max_output_tokens < 500 {
-      warn!("   💡 max_output_tokens ({}) might be too low for complex responses. Consider increasing to 1000+.", max_output_tokens);
+      warn!(
+        "   💡 max_output_tokens ({}) might be too low for complex responses. Consider increasing to 1000+.",
+        max_output_tokens
+      );
     }
-    
+
     if temperature < 0.1 {
-      warn!("   💡 temperature ({}) is very low. Try increasing to 0.3-0.7 for more varied responses.", temperature);
+      warn!(
+        "   💡 temperature ({}) is very low. Try increasing to 0.3-0.7 for more varied responses.",
+        temperature
+      );
     }
-    
+
     warn!("   💡 Suggested parameter adjustments:");
     warn!("      - For short responses: --max-tokens 500 --temperature 0.3");
     warn!("      - For detailed responses: --max-tokens 2000 --temperature 0.5");
     warn!("      - For creative responses: --max-tokens 4000 --temperature 0.7");
-    
+
     // 检查是否有任何 finishReason 信息可以帮助诊断
     warn!("   📊 If you saw any finishReason warnings above, they indicate the specific cause.");
     warn!("   📊 No finishReason warnings usually means the model chose not to respond to this input.");
